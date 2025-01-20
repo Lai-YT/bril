@@ -20,3 +20,4 @@ link_directories(${LLVM_LIBRARY_DIRS})
 
 # Our pass lives in this subdirectory.
 add_subdirectory(pass)
+add_subdirectory(test)

@@ -9,7 +9,7 @@ all: $(EXE)
 %.out: %.c
 	$(CC) $(CFLAGS) -o $@ $<
 
-test:
+test: $(EXE)
 	@turnt $(EXE) --verbose --diff --parallel
 .PHONY: test
 
