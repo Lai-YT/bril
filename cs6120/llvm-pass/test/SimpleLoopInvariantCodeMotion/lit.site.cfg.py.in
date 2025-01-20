@@ -1,0 +1,12 @@
+from pathlib import Path
+
+config.src_dir = r"@CMAKE_SOURCE_DIR@"
+config.build_dir = r"@CMAKE_BINARY_DIR@"
+config.slicm_build_dir = config.build_dir + "/pass/SimpleLoopInvariantCodeMotion"
+config.slicm_test_src_dir = config.src_dir + "/test/SimpleLoopInvariantCodeMotion"
+config.slicm_test_build_dir = config.build_dir + "/test/SimpleLoopInvariantCodeMotion"
+
+lit_config.load_config(
+    config,
+    Path(config.slicm_test_src_dir) / "lit.cfg.py",
+)
