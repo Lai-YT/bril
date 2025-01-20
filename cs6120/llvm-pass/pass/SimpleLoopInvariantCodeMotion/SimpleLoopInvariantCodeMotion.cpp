@@ -1,4 +1,5 @@
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/PriorityWorklist.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -24,6 +25,8 @@ public:
   SimpleLoopInvariantCodeMotionImpl(LoopInfo &LI, DominatorTree &DT)
       : LI(LI), DT(DT) {}
 
+  /// Run the loop invariant code motion on the loop \p L. Subloops are
+  /// expected to be already processed.
   bool run(Loop &L) const;
 
   /// Check if the loop \p L is in the candidate form.
@@ -47,6 +50,17 @@ private:
   DominatorTree &DT;
 };
 
+/// Append the loop \p L and its nested loops to the worklist \p Worklist.
+/// \note The innermost loop will be the first element when popping from the
+/// worklist with `pop_back_val`.
+void appendNestedLoopsToWorklist(Loop &L,
+                                 SmallPriorityWorklist<Loop *, 4> &Worklist) {
+  Worklist.insert(&L);
+  for (auto &SubLoop : L) {
+    appendNestedLoopsToWorklist(*SubLoop, Worklist);
+  }
+}
+
 class SimpleLoopInvariantCodeMotionPass
     : public PassInfoMixin<SimpleLoopInvariantCodeMotionPass> {
 public:
@@ -55,9 +69,18 @@ public:
     auto &LI = FAM.getResult<LoopAnalysis>(F);
     auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
     SimpleLoopInvariantCodeMotionImpl Impl(LI, DT);
+
     bool Changed = false;
-    for (Loop *L : LI) {
-      Changed |= Impl.run(*L);
+    // XXX: Is the order of the top-level loops important?
+    for (auto *L : LI.getTopLevelLoops()) {
+      SmallPriorityWorklist<Loop *, 4> Worklist;
+      appendNestedLoopsToWorklist(*L, Worklist);
+      while (!Worklist.empty()) {
+        // Hoist the loop invariant instructions in the innermost loop first,
+        // and then all the way up.
+        auto *L = Worklist.pop_back_val();
+        Changed |= Impl.run(*L);
+      }
     }
     return Changed ? PreservedAnalyses::none() : PreservedAnalyses::all();
   }
@@ -78,6 +101,10 @@ bool SimpleLoopInvariantCodeMotionImpl::run(Loop &L) const {
     NumLIs = LIs.size();
     for (auto *BB : L.getBlocks()) {
       for (auto &I : *BB) {
+        // Is in subloop; should already be hoisted.
+        if (LI.getLoopFor(I.getParent()) != &L)
+          continue;
+
         if (LIs.contains(&I))
           continue;
 
@@ -88,6 +115,7 @@ bool SimpleLoopInvariantCodeMotionImpl::run(Loop &L) const {
   }
 
   // Hoist the instructions in the order they appear in the loop.
+  unsigned NumHoisted = 0;
   for (auto *BB : L.blocks()) {
     for (auto &I : make_early_inc_range(*BB)) {
       if (!LIs.contains(&I))
@@ -96,11 +124,12 @@ bool SimpleLoopInvariantCodeMotionImpl::run(Loop &L) const {
       if (isSafeToHoist(I, L)) {
         errs() << "Hoisting: " << I << "\n";
         I.moveBefore(Preheader->getTerminator());
+        ++NumHoisted;
       }
     }
   }
 
-  return true;
+  return !!NumHoisted;
 }
 
 bool SimpleLoopInvariantCodeMotionImpl::isCandidate(Loop &L) const {
