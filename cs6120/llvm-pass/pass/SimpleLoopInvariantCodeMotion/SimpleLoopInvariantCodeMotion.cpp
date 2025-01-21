@@ -3,27 +3,38 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/OptimizationRemarkEmitter.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/Compiler.h"
-#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/FormatVariadic.h"
+
 #include <sys/types.h>
+
+#define DEBUG_TYPE "slicm"
+
+STATISTIC(NotSimplifiedForm, "Loop not in simplified form");
+STATISTIC(UnsafeToHoist, "Instruction is unsafe to hoist");
+STATISTIC(Hoisted, "Instruction has been hoisted");
 
 using namespace llvm;
 
 namespace {
 
-constexpr char PassName[] = "slicm";
+constexpr char PassName[] = DEBUG_TYPE;
 constexpr char PluginName[] = "Simple Loop Invariant Code Motion";
 
 class SimpleLoopInvariantCodeMotionImpl {
 public:
-  SimpleLoopInvariantCodeMotionImpl(LoopInfo &LI, DominatorTree &DT)
-      : LI(LI), DT(DT) {}
+  SimpleLoopInvariantCodeMotionImpl(LoopInfo &LI, DominatorTree &DT,
+                                    OptimizationRemarkEmitter &ORE)
+      : LI(LI), DT(DT), ORE(ORE) {}
 
   /// Run the loop invariant code motion on the loop \p L. Subloops are
   /// expected to be already processed.
@@ -48,6 +59,7 @@ public:
 private:
   LoopInfo &LI;
   DominatorTree &DT;
+  OptimizationRemarkEmitter &ORE;
 };
 
 /// Append the loop \p L and its nested loops to the worklist \p Worklist.
@@ -65,10 +77,10 @@ class SimpleLoopInvariantCodeMotionPass
     : public PassInfoMixin<SimpleLoopInvariantCodeMotionPass> {
 public:
   PreservedAnalyses run(Function &F, FunctionAnalysisManager &FAM) {
-    errs() << "SLICM @ " << F.getName() << "\n";
     auto &LI = FAM.getResult<LoopAnalysis>(F);
     auto &DT = FAM.getResult<DominatorTreeAnalysis>(F);
-    SimpleLoopInvariantCodeMotionImpl Impl(LI, DT);
+    auto &ORE = FAM.getResult<OptimizationRemarkEmitterAnalysis>(F);
+    SimpleLoopInvariantCodeMotionImpl Impl(LI, DT, ORE);
 
     bool Changed = false;
     // XXX: Is the order of the top-level loops important?
@@ -90,7 +102,6 @@ bool SimpleLoopInvariantCodeMotionImpl::run(Loop &L) const {
   if (!isCandidate(L))
     return false;
 
-  errs() << "SLICM @ " << L.getHeader()->getName() << "\n";
   auto *Preheader = L.getLoopPreheader();
   assert(Preheader && "Loop must have a preheader");
 
@@ -101,6 +112,9 @@ bool SimpleLoopInvariantCodeMotionImpl::run(Loop &L) const {
     NumLIs = LIs.size();
     for (auto *BB : L.getBlocks()) {
       for (auto &I : *BB) {
+        if (I.isDebugOrPseudoInst())
+          continue;
+
         // Is in subloop; should already be hoisted.
         if (LI.getLoopFor(I.getParent()) != &L)
           continue;
@@ -115,27 +129,46 @@ bool SimpleLoopInvariantCodeMotionImpl::run(Loop &L) const {
   }
 
   // Hoist the instructions in the order they appear in the loop.
-  unsigned NumHoisted = 0;
   for (auto *BB : L.blocks()) {
     for (auto &I : make_early_inc_range(*BB)) {
       if (!LIs.contains(&I))
         continue;
 
       if (isSafeToHoist(I, L)) {
-        errs() << "Hoisting: " << I << "\n";
+        // Hoist the instruction to the preheader.
         I.moveBefore(Preheader->getTerminator());
-        ++NumHoisted;
+
+        ++Hoisted;
+        ORE.emit(OptimizationRemark(PassName, Hoisted.getName(),
+                                    I.getDebugLoc(), I.getParent())
+                 << formatv("[{0}]: {1}", L.getHeader()->getParent()->getName(),
+                            Hoisted.getDesc())
+                        .str());
+      } else {
+        ++UnsafeToHoist;
+        ORE.emit(OptimizationRemarkMissed(PassName, UnsafeToHoist.getName(),
+                                          I.getDebugLoc(), I.getParent())
+                 << formatv("[{0}]: {1}", L.getHeader()->getParent()->getName(),
+                            UnsafeToHoist.getDesc())
+                        .str());
       }
     }
   }
 
-  return !!NumHoisted;
+  return Hoisted != 0;
 }
 
 bool SimpleLoopInvariantCodeMotionImpl::isCandidate(Loop &L) const {
   // SLICM moves code to the preheader, so the loop must have a preheader.
+  // For simplicity, we require the loop to be in simplified form.
   if (!L.isLoopSimplifyForm()) {
-    errs() << "Loop is not in loop simplify form\n";
+    ++NotSimplifiedForm;
+    ORE.emit(OptimizationRemarkAnalysis(PassName, NotSimplifiedForm.getName(),
+                                        L.getStartLoc(), L.getHeader())
+             << formatv("[{0}]: Loop is not a candidate for SLICM: {1}",
+                        L.getHeader()->getParent()->getName(),
+                        NotSimplifiedForm.getDesc())
+                    .str());
     return false;
   }
 
