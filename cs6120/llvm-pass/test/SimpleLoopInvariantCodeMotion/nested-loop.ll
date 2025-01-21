@@ -1,6 +1,6 @@
-; RUN: %opt -S --load-pass-plugin=%slicm_build_dir/SimpleLoopInvariantCodeMotionPass.so -passes='loop-simplify,slicm' %s -o - | FileCheck %s
+; RUN: %opt -S --load-pass-plugin=%slicm_build_dir/SimpleLoopInvariantCodeMotionPass.so -passes='loop-simplify,slicm' < %s -o - | FileCheck %s
 
-; RUN: %opt -S --load-pass-plugin=%slicm_build_dir/SimpleLoopInvariantCodeMotionPass.so -passes='loop-simplify,slicm' -pass-remarks=slicm -pass-remarks-analysis=slicm -pass-remarks-missed=slicm --disable-output %s 2>&1 | FileCheck %s --check-prefix=REMARKS
+; RUN: %opt -S --load-pass-plugin=%slicm_build_dir/SimpleLoopInvariantCodeMotionPass.so -passes='loop-simplify,slicm' -pass-remarks=slicm -pass-remarks-analysis=slicm -pass-remarks-missed=slicm --disable-output < %s 2>&1 | FileCheck %s --check-prefix=REMARKS
 ; REMARKS: remark: nested-loop.c:12:15: [main]: Instruction has been hoisted
 ; REMARKS: remark: nested-loop.c:12:17: [main]: Instruction has been hoisted
 ; REMARKS: remark: nested-loop.c:14:17: [main]: Instruction has been hoisted

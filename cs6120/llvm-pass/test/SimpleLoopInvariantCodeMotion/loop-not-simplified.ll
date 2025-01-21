@@ -1,5 +1,5 @@
 ; Not running loop pass on this file so it is not in simplified form.
-; RUN: %opt --load-pass-plugin=%slicm_build_dir/SimpleLoopInvariantCodeMotionPass.so --passes='mem2reg,slicm' -pass-remarks-analysis=slicm -disable-output %s 2>&1 | FileCheck --check-prefix=REMARKS %s
+; RUN: %opt --load-pass-plugin=%slicm_build_dir/SimpleLoopInvariantCodeMotionPass.so --passes='mem2reg,slicm' -pass-remarks-analysis=slicm -disable-output < %s 2>&1 | FileCheck --check-prefix=REMARKS %s
 
 ; REMARKS: remark: loop-not-simplified.c:5:3: [main]: Loop is not a candidate for SLICM: Loop not in simplified form
 

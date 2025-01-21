@@ -1,4 +1,4 @@
-; RUN: %opt -S --load-pass-plugin=%slicm_build_dir/SimpleLoopInvariantCodeMotionPass.so -passes='loop-simplify,slicm' %s -o - | FileCheck %s
+; RUN: %opt -S --load-pass-plugin=%slicm_build_dir/SimpleLoopInvariantCodeMotionPass.so -passes='loop-simplify,slicm' < %s -o - | FileCheck %s
 
 ; RUN: %opt -S --load-pass-plugin=%slicm_build_dir/SimpleLoopInvariantCodeMotionPass.so -passes='loop-simplify,slicm' -pass-remarks=slicm -pass-remarks-analysis=slicm -pass-remarks-missed=slicm --disable-output %s 2>&1 | FileCheck %s --check-prefix=REMARKS
 ; REMARKS: remark: loop.c:9:13: [main]: Instruction has been hoisted
