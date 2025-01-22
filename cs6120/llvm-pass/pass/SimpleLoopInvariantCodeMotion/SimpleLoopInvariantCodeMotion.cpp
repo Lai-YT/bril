@@ -10,10 +10,13 @@
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/PassManager.h"
+#include "llvm/Passes/OptimizationLevel.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/FormatVariadic.h"
+#include "llvm/Transforms/Utils/LoopSimplify.h"
+#include "llvm/Transforms/Utils/Mem2Reg.h"
 
 #include <sys/types.h>
 
@@ -232,12 +235,35 @@ bool SimpleLoopInvariantCodeMotionImpl::dominatesAll(
   return all_of(Blocks, [&](BasicBlock *BB) { return DT.dominates(&I, BB); });
 }
 
+/// A wrapper pass to run Simple Loop Invariant Code Motion on a module.
+/// Dependent passes are registered to run together.
+class SimpleLoopInvariantCodeMotionModulePass
+    : public PassInfoMixin<SimpleLoopInvariantCodeMotionModulePass> {
+public:
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM) {
+    auto &FAM =
+        MAM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+    FunctionPassManager FPM;
+    FPM.addPass(PromotePass());
+    FPM.addPass(LoopSimplifyPass());
+    FPM.addPass(SimpleLoopInvariantCodeMotionPass());
+    PreservedAnalyses PA = PreservedAnalyses::all();
+    for (Function &F : M) {
+      if (F.isDeclaration())
+        continue;
+      PA.intersect(FPM.run(F, FAM));
+    }
+    return PA;
+  }
+};
+
 } // namespace
 
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
 llvmGetPassPluginInfo() {
   return {LLVM_PLUGIN_API_VERSION, PluginName, LLVM_VERSION_STRING,
           [](PassBuilder &PB) {
+            // #1 REGISTRATION FOR "opt -passes=slicm"
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, FunctionPassManager &FPM,
                    ArrayRef<PassBuilder::PipelineElement>) {
@@ -246,6 +272,13 @@ llvmGetPassPluginInfo() {
                     return true;
                   }
                   return false;
+                });
+            // #2 REGISTRATION FOR "-O0 -Xclang -disable-O0-optnone"
+            PB.registerPipelineStartEPCallback(
+                [](ModulePassManager &MPM, OptimizationLevel Level) {
+                  if (Level == OptimizationLevel::O0) {
+                    MPM.addPass(SimpleLoopInvariantCodeMotionModulePass());
+                  }
                 });
           }};
 }
